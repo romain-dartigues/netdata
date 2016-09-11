@@ -1,5 +1,19 @@
 #!/usr/bin/env python
 # vim:set fileencoding=utf8 ts=4 sw=4 et:
+'''
+See: https://github.com/firehol/netdata/wiki/How-to-write-new-module
+
+Sample configuration:
+
+.. code-block:: yaml
+
+   ---
+   remote1:
+     url: https://user:pass@example.net/
+'''
+
+# stdlib
+import re
 
 # netdata dependency
 from base import SimpleService
@@ -10,7 +24,17 @@ try:
 except ImportError:
     XenAPI = None
 
-# See: https://github.com/firehol/netdata/wiki/How-to-write-new-module
+
+
+
+priority = 90000
+retries = 10
+update_every = 60
+
+_uri_credentials = re.compile(
+    '^[a-z]*://(?P<credentials>(?P<user>[^:]*)(?:\:(?P<pass>[^@]*))?\@)'
+)
+
 ORDER = [
     'PIF_metrics',
     'VBD_metrics',
@@ -67,3 +91,55 @@ CHART = {
 
 
 class Service(SimpleService):
+    session = None
+    url = None
+    username = None
+    password = None
+
+
+    def __init__(self, configuration=None, name=None):
+        SimpleService.__init__(self, configuration, name)
+        if self.configuration.get('url'):
+            self.url = self.configuration['url']
+            match = _uri_credentials.match(self.url)
+            if match:
+                self.username = match.group('user')
+                self.password = match.group('pass')
+                self.url = self.url.replace(match.group('credentials'), '')
+
+
+    def _connect(self, force=False):
+        '''Attempt to connect to a local XenServer API through :attr:`url`
+
+        :param bool force: attempt a connection even if one seems present
+        :return: a (hopefully active) XenAPI session
+        :rtype: XenAPI.Session
+        '''
+        if not self.session or force:
+            if self.url and (self.username or self.password):
+                self.session = XenAPI.Session(self.url)
+                self.session.login_with_password(
+                    self.username or '',
+                    self.password or '',
+                )
+            else:
+                self.session = XenAPI.xapi_local()
+        return self.session
+
+
+    def check(self):
+        if XenAPI is not None:
+            try:
+                return bool(self._connect())
+            except:
+                pass
+        return False
+
+
+    def _get_data(self):
+        if not self.session:
+            try:
+                self._connect()
+            except:
+                return
+        # TODO
