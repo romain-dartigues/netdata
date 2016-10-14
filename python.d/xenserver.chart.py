@@ -178,6 +178,8 @@ class Service(SimpleService):
                 'netdata',
             )
 
+#            API_VERSION = self.session._get_api_version()
+
         return isinstance(self.session, XenAPI.Session)
 
 
@@ -208,6 +210,7 @@ class Service(SimpleService):
 
             if not VM['is_control_domain']:
                 VM['VDIs'] = (
+                    # ???
                     self.get_domU_VDIs_from_name(VM['name_label'])
                     or
                     self.get_domU_VDIs_from_conf(VM['name_label'])
