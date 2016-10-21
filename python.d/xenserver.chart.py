@@ -1,7 +1,11 @@
 #!/usr/bin/env python
 # vim:set fileencoding=utf8 ts=4 sw=4 et:
 '''
-See: https://github.com/firehol/netdata/wiki/How-to-write-new-module
+Resources:
+
+* https://github.com/firehol/netdata/wiki/How-to-write-new-module
+* https://github.com/firehol/netdata/wiki/External-Plugins
+* http://docs.citrix.com/content/dam/docs/en-us/xenserver/xenserver-7-0/downloads/xenserver-7-0-management-api-guide.pdf
 
 Sample configuration:
 
@@ -13,8 +17,12 @@ Sample configuration:
 '''
 
 # stdlib
+import collections
 import logging
 import re
+import time
+import urllib
+import xml.dom.minidom
 
 # netdata dependency
 from base import SimpleService
@@ -37,22 +45,40 @@ logging.basicConfig(
 logger = logging.getLogger('netdata.xenserver')
 logger.debug('module loaded')
 
-priority = 90000
+#priority = 90000
 retries = 10
-update_every = 1
+update_every = 5
 
-_B2KiB = 1024
-'''bytes to kibibyte'''
+_shift1 = 1024
+_shift2 = 1024*1024
+_shift3 = 1024*1024*1024
 
-_B2MiB = 1024*1024
-'''bytes to mebibyte'''
+_uri = re.compile(r'''
+^
+(?:
+    (?P<scheme>[^:]*?)
+    ://
+        (?P<credentials>
+        (?P<username>[^:]*?)
+        :
+        (?P<password>[^@]*]?)
+        @
+    )?
+)?
+(?P<netloc>
+    (?P<hostname>[^/:]+?)
+    (?:
+        \:
+        (?P<port>\d+?)
+    )?
+)?
+(?:
+    (?P<path>/[^#]*?)
+    (?P<fragment>\#.*)?
+)?
+$
+''', re.X | re.I)
 
-_B2GiB = 1024*1024*1024
-'''bytes to gibibyte'''
-
-_uri_credentials = re.compile(
-    r'^[a-z]*://(?P<credentials>(?P<user>[^:]*)(?:\:(?P<pass>[^@]*))?\@)'
-)
 
 #ORDER = [
 #    'PIF_metrics',
@@ -64,20 +90,38 @@ _uri_credentials = re.compile(
 
 CHARTS = {
     'host': {
-        'options': [None, "Host memory usage", "MB", 'mem', 'host.metrics', 'stacked'],
+        'options': [None, "Host memory usage", "GiB", 'mem', 'host.metrics', 'stacked'],
         'lines': [
-            ['host.metrics.memory_free', 'free', 'absolute', 1, _B2MiB],
-            ['host.metrics.memory_used', 'used', 'absolute', 1, _B2MiB],
+            ['host.metrics.memory_free', 'free', 'absolute', 1, _shift2],
+            ['host.metrics.memory_used', 'used', 'absolute', 1, _shift2],
         ],
     },
     'VMs.mem': {
-        'options': [None, "VM memory usage", "MB", 'mem', 'vm.metrics', 'stacked'],
+        'options': [None, "VM memory usage", "MiB", 'mem', 'vm.metrics', 'stacked'],
         'lines': [
             # set by Service.__get_VMs
         ],
     },
-    'VMs.cpu': {
-        'options': [None, 'VM CPU count', 'count', 'CPU', 'vm.metrics', 'line'],
+    'VMs.cpu.count': {
+        'options': [None, 'VM vCPU count', 'count', 'CPU', 'vm.metrics', 'line'],
+        'lines': [
+            # set by Service.__get_VMs
+        ],
+    },
+    'VMs.cpu.usage': {
+        'options': [None, 'VM CPU usage, 100 % means one vCPU', 'CPU %', 'CPU', 'vm.metrics', 'stacked'],
+        'lines': [
+            # set by Service.__get_VMs
+        ],
+    },
+    'VBD.io': {
+        'options': [None, 'I/O from VM', 'MiB/s', 'VM I/O', 'vm.metrics'],
+        'lines': [
+            # set by Service.__get_VMs
+        ],
+    },
+    'VBD.iops': {
+        'options': [None, 'I/O requests/s from VM', 'IO/s', 'VM I/O', 'vm.metrics'],
         'lines': [
             # set by Service.__get_VMs
         ],
@@ -96,13 +140,14 @@ CHARTS = {
 #            ['io_write_kbs', 'Write bandwidth'],
 #        ],
 #    },
-#    'VIF_metrics': {
-#        'options': [None, 'Virtual InterFaces', 'kiB/s', 'bandwidth', 'pif.metrics'],
-#        'lines': [
+    'VIF_metrics': {
+        'options': [None, 'Virtual InterFaces', 'kiB/s', 'bandwidth', 'vif.metrics'],
+        'lines': [
+            # set by Service.__get_VMs
 #            ['io_read_kbs', 'Read bandwidth'],
 #            ['io_write_kbs', 'Write bandwidth'],
-#        ],
-#    },
+        ],
+    },
 #    # http://docs.vmd.citrix.com/XenServer/6.5.0/1.0/en_gb/api/?c=VM_guest_metrics
 #    'VM_guest_metrics': {
 #        'options': [None, 'metrics reported by the guest', None, 'VM.guest', 'VM.guest.metrics', 'stacked'],
@@ -133,6 +178,125 @@ CHARTS = {
 #dbg_file = __import__('sys').stdout
 #dbg = lambda s:(dbg_file.write('%s\n'%(s,)), dbg_file.flush())
 
+class RRDUpdates(dict):
+    '''map a rrd_updates to a nice dict
+
+    Resources:
+
+    * http://www.xenserver.org/partners/developing-products-for-xenserver/18-sdk-development/96-xs-dev-rrds.html
+
+    ::
+
+       {'machine_uuid': {'type': 'host', 'metric_name': 0.123, ...}, ... }
+
+    .. Warning::
+       The VM RRDs are stored on the host on which they run, or the pool master
+       when they are not running.
+    '''
+    start = 0
+    step = 60
+    end = 0
+    params = None
+
+
+    def __init__(self, session, server='localhost', start=None, step=5, host=True):
+        '''
+        :param :class:`XenAPI.Session` session:
+        :param str server:
+        :param start: start timestamp (default: now)
+        :type start: None or int
+        :param int step: interval
+        :param bool host: if True, include host RRD
+        '''
+        self.server = server
+        self.params = {
+            'session_id': session.handle,
+            'start': start or time.time().__int__() - step,
+            'host': 'true' if host else 'false',
+            'cf': 'AVERAGE',
+            'interval': step,
+        }
+
+
+    def refresh(self, **kwargs):
+        '''refresh the data
+
+        :param kwargs: update the request parameters
+        '''
+        self.params.update(kwargs)
+
+        uri = 'http://%s/rrd_updates?%s' % (
+            self.server,
+            '&'.join('%s=%s' % r for r in self.params.iteritems()),
+        )
+        fileobj = urllib.URLopener().open(uri)
+
+        meta, data = xml.dom.minidom.parse(fileobj).firstChild.childNodes
+
+        self.start = int(meta.getElementsByTagName('start')[0].firstChild.data)
+        self.step = int(meta.getElementsByTagName('step')[0].firstChild.data)
+        self.end = int(meta.getElementsByTagName('end')[0].firstChild.data)
+
+        # aggregate statistics
+        avg = [0] * int(meta.getElementsByTagName('columns')[0].firstChild.data)
+        for row in data.childNodes:
+            # each row is a time entry
+            for i, v in enumerate(row.getElementsByTagName('v')):
+                # each "v" is a value
+                avg[i] += float(v.firstChild.data)
+        l = int(meta.getElementsByTagName('rows')[0].firstChild.data)
+        if not l:
+            # TODO: logging.debug('RRDUpdates.refresh() no data?...
+            return
+        avg = tuple(i / l for i in avg)
+
+        # associate averages with their machine / metric name
+        result = {}
+        for i, row in enumerate(meta.getElementsByTagName('legend')[0].childNodes):
+            t, uuid, name = row.firstChild.data.encode('latin1').split(':')[1:]
+            if uuid not in result:
+                result[uuid] = {'type': t}
+            result[uuid][name] = avg[i]
+        self.clear()
+        self.update(result)
+
+        self.params['start'] = self.end + 1
+
+
+    def get_VM_simple(self, uuid):
+        '''
+        :param str uuid: vm uuid
+        :rtype: collections.defaultdict
+        '''
+        RRD = self.get(uuid, {})
+        # this should contains a dict with keys like:
+        # cpu0, cpu1, ...
+        # memory, memory_internal_free, memory_target
+        # type (vm or host)
+        # vbd_xvda_inflight, vbd_xvda_io_throughput_read, vbd_xvda_io_throughput_total, vbd_xvda_io_throughput_write, vbd_xvda_iops_read, vbd_xvda_iops_total, vbd_xvda_iops_write, vbd_xvda_iowait, vbd_xvda_read, vbd_xvda_read_latency, vbd_xvda_write, vbd_xvda_write_latency, ...
+        metrics = collections.defaultdict(int)
+
+        for k, v in RRD.iteritems():
+            if k[:3] == 'cpu':
+                metrics['cpu_count'] += 1
+                key = k[:3]
+            elif k[:4] == 'vbd_':
+                key = k[:4] + k[4:].partition('_')[-1]
+#            elif k.startswith('vif'): TODO
+            elif k[:6] == 'memory':
+                key = k
+            else:
+                continue
+            metrics[key] += v
+
+        return metrics
+
+
+        def __missing__(self, key):
+            return collections.defaultdict(int)
+
+
+
 class Service(SimpleService):
     session = None
     ''':class:`XenAPI.Session` instance
@@ -150,26 +314,27 @@ class Service(SimpleService):
     '''password (extracted from the URI)
     '''
 
+    server = 'localhost'
+    '''host of the XenServer (for RRD)
+    '''
+
+    RRD = None
+
     def __init__(self, configuration=None, name=None):
         SimpleService.__init__(self, configuration, name)
-        self.__set_defaults()
-
         self.definitions = CHARTS
         self.order = sorted(CHARTS)
+        self.configuration.setdefault('dom0 on top', False)
+        self.configuration.setdefault('uuid for VM', False)
 
         if self.configuration.get('url'):
             self.url = self.configuration['url']
-            match = _uri_credentials.match(self.url)
+            match = _uri.match(self.url)
             if match:
-                self.username = match.group('user')
-                self.password = match.group('pass')
+                self.username = match.group('username')
+                self.password = match.group('password')
+                self.server = match.group('hostname')
                 self.url = self.url.replace(match.group('credentials'), '')
-
-
-    def __set_defaults(self):
-        '''set some defaults
-        '''
-        self.configuration.setdefault('dom0 on top', False)
 
 
     def check(self):
@@ -185,24 +350,6 @@ class Service(SimpleService):
         finally:
             logger.debug('check: %s', result, exc_info=True)
             return result
-
-
-#    def create(self):
-#        dbg('xs: create!')
-#        self.chart("example.python_random", '', 'A random number', 'random number',
-#                   'random', 'random', 'line', self.priority, self.update_every)
-#        self.dimension('random1')
-#        self.commit()
-#        return True
-
-
-#    def update(self, interval):
-#        dbg('xs: update')
-#        self.begin("example.python_random", interval)
-#        self.set("random1", random.randint(0, 100))
-#        self.end()
-#        self.commit()
-#        return True
 
 
     def _connect(self, force=False):
@@ -229,6 +376,7 @@ class Service(SimpleService):
                     '1.0',
                     'netdata',
                 )
+
             except IOError:
                 logger.error('unable to connect to: %s (check permissions on your socket)', self.session)
                 # will work with:
@@ -245,7 +393,14 @@ class Service(SimpleService):
             logger.info(
                 'connected to XenServer %s API version %s',
                 host['hostname'],
-                self.session._get_api_version(),
+                self.session.API_version,
+            )
+
+            # setup RRDs
+            self.RRD = RRDUpdates(
+                self.session,
+                self.server,
+                step=self.update_every,
             )
 
         return isinstance(self.session, XenAPI.Session)
@@ -253,11 +408,14 @@ class Service(SimpleService):
 
     def __get_VMs(self, host_ref):
         '''
+        Compute data for VM and set some lines of :attr:`definitions`.
+
         :rtype: dict
         '''
         data = {}
-        mem_lines = {}
-        cpu_lines = {}
+        tree = collections.defaultdict(dict)
+        name_key = 'uuid' if self.configuration['uuid for VM'] else 'name_label'
+        dom0_on_top = self.configuration['dom0 on top']
 
         VMs = self.session.xenapi.VM.get_all_records_where(
             'field "resident_on" = "%s"' % (
@@ -266,28 +424,55 @@ class Service(SimpleService):
         )
 
         for VM in VMs.itervalues():
+            metrics = self.RRD.get_VM_simple(VM['uuid'])
             key = (VM['is_control_domain'], VM['uuid'])
-            VM['metrics'] = self.session.xenapi.VM_metrics.get_record(VM['metrics'])
+            name = VM[name_key]
 
-            # compute VM memory usage
-            mem_key = 'VM.metrics.%(uuid)s.mem' % VM
-            data[mem_key] = int(VM['metrics']['memory_actual'])
-            mem_lines[key] = (mem_key, VM['uuid'], 'absolute', 1, _B2MiB)
+            # VM memory usage
+            k = 'VM.metrics.%(uuid)s.mem' % VM
+            data[k] = metrics['memory']
+            tree['VMs.mem'][key] = (k, name, None, 1, _shift2)
 
-            # compute VM CPU count
-            cpu_key = 'VM.metrics.%(uuid)s.CPU.count' % VM
-            data[cpu_key] = int(VM['metrics']['VCPUs_number'])
-            cpu_lines[key] = (cpu_key, VM['uuid'], 'absolute')
+            # VM CPU count
+            k = 'VM.metrics.%(uuid)s.CPU.count' % VM
+            data[k] = metrics['cpu_count']
+            tree['VMs.cpu.count'][key] = (k, name)
 
-        self.definitions['VMs.mem']['lines'] = [
-            mem_lines[k]
-            for k in sorted(mem_lines, reverse=self.configuration['dom0 on top'])
-        ]
+            # VM CPU usage
+            k = 'VM.metrics.%(uuid)s.CPU.usage' % VM
+            data[k] = metrics['cpu'] * 100
+            tree['VMs.cpu.usage'][key] = (k, name)
 
-        self.definitions['VMs.cpu']['lines'] = [
-            cpu_lines[k]
-            for k in sorted(cpu_lines, reverse=self.configuration['dom0 on top'])
-        ]
+            # VIF_metrics
+            # TODO
+
+            # I/O
+            k = 'VM.metrics.%(uuid)s.io.read' % VM
+            data[k] = metrics['vbd_read']
+            tree['VBD.io'][key + ('read',)] = (k, '%s read' % (name,), None, 1, _shift2)
+
+            k = 'VM.metrics.%(uuid)s.io.write' % VM
+            data[k] = metrics['vbd_write']
+            tree['VBD.io'][key + ('write', )] = (k, '%s write' % (name,), None, -1, _shift2)
+
+            # I/O/s
+            k = 'VM.metrics.%(uuid)s.ips' % VM
+            data[k] = metrics['vbd_iops_read'] * 1000
+            tree['VBD.iops'][key + ('i',)] = (k, '%s read' % (name,), None, 1, 100)
+
+            k = 'VM.metrics.%(uuid)s.ops' % VM
+            data[k] = metrics['vbd_iops_write'] * 100
+            tree['VBD.iops'][key + ('o', )] = (k, '%s write' % (name,), None, -1, 100)
+
+            # 
+
+        del k
+        # sort all lines
+        for key, item in tree.iteritems():
+            self.definitions[key]['lines'] = [
+                item[k]
+                for k in sorted(item, reverse=dom0_on_top)
+            ]
 
         return data
 
@@ -302,30 +487,21 @@ class Service(SimpleService):
             logger.debug('get_data: aborted')
             return
         data = {}
+        self.RRD.refresh()
 
         host_ref = self.session.xenapi.session.get_this_host(self.session._session)
         host = self.session.xenapi.host.get_record(host_ref)
 
-        host['metrics'] = self.session.xenapi.host_metrics.get_record(host['metrics'])
-        data['host.metrics.memory_free'] = int(host['metrics']['memory_free'])
-        data['host.metrics.memory_used'] = int(host['metrics']['memory_total']) - int(host['metrics']['memory_free'])
-        data['host.metrics.memory_total'] = int(host['metrics']['memory_total'])
+        host_metrics = self.RRD[host['uuid']]
+        data['host.metrics.memory_free'] = host_metrics['memory_free_kib'] * _shift1
+        data['host.metrics.memory_total'] = host_metrics['memory_total_kib'] * _shift1
+        data['host.metrics.memory_used'] = data['host.metrics.memory_total'] - data['host.metrics.memory_free']
 
         data.update(self.__get_VMs(host_ref))
 
         # self.session.xenapi.SR.get_all_records()
 
 #        VMs = self.session.xenapi.VM.get_all_records()
-
-
-
-#            if not VM['is_control_domain']:
-#                VM['VDIs'] = (
-#                    # ???
-#                    self.get_domU_VDIs_from_name(VM['name_label'])
-#                    or
-#                    self.get_domU_VDIs_from_conf(VM['name_label'])
-#                )
 
         logger.debug('get_data: data=%r', data)
         return data
@@ -337,11 +513,17 @@ class Service(SimpleService):
 
 logger.debug('loaded')
 
+if False: # if True:
+    import user;from pprint import pprint;user;pprint
+    self = Service({'update_every':3, 'priority':99999, 'retries':3})
+    host_ref = self.session.xenapi.session.get_this_host(self.session._session)
+
+
+    Self = Service({'update_every':3, 'priority':99999, 'retries':3, 'url': 'https://root:sdfsdf@localhost'})
 #if __name__ == '__main__':
 #    logging.basicConfig(
 #        format='%(levelname)s: %(message)s',
 #        datefmt='%F %T',
 #        level=logging.DEBUG,
 #    )
-#    self = Service({'update_every':3, 'priority':99999, 'retries':3})
 #    self.check()
