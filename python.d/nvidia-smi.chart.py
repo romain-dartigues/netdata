@@ -30,6 +30,7 @@ input samples::
 
 
 # stdlib
+import collections
 import logging
 import subprocess
 
@@ -41,7 +42,7 @@ from base import SimpleService
 
 logging.basicConfig(
     filename='/tmp/rdartigues.log',
-    format='%(asctime)s %(filename)s:%(lineno)d [%(levelname)s] %(funcName)s %(message)s',
+    format='%(asctime)s %(filename)s:%(lineno)d [%(levelname)s] %(funcName)s() %(message)s',
     datefmt='%FT%T',
     level=logging.DEBUG,
 )
@@ -52,18 +53,7 @@ logger.debug('module loaded')
 retries = 3
 update_every = 5
 
-_shift1 = 1024
-_shift2 = 1024*1024
-_shift3 = 1024*1024*1024
 
-
-#ORDER = [
-#    'PIF_metrics',
-#    'VBD_metrics',
-#    'VIF_metrics',
-#    'VM_guest_metrics',
-#    'VM_metrics',
-#]
 METRICS = [
     'index',
     'utilization.gpu',
@@ -78,100 +68,25 @@ METRICS = [
 CHARTS = {
     # utilization.gpu [%], utilization.memory [%], memory.total [MiB], memory.used [MiB], memory.free [MiB], fan.speed [%], temperature.gpu
     'GPU': {
-        'options': [None, 'GPU usage', '%', 'utilization', 'nvidia.utilization.gpu', 'stacked'],
-        'lines': [
-#            [None, None, 'used', 'absolute'],
-            ['utilization.gpu.0', 'a', 'used', 'absolute'],
-            ['utilization.gpu.1', None, 'used', 'absolute'],
-        ],
+        'options': [None, 'GPU usage', '%', 'utilization', 'nvidia.utilization.gpu', 'line'],
+        'lines': [ ],
+        'template': ['utilization.gpu', 'GPU', 'absolute'],
     },
-#    'memory': {
-#        'options': [None, 'memory usage', '%', 'utilization', 'nvidia.utilization.memory', 'stacked'],
-#        'lines': [
-##            [None, None, 'used', 'absolute'],
-#            [None, 'memory.total.0', 'used', 'absolute'],
-#            [None, 'memory.total.1', 'used', 'absolute'],
-#        ],
-#    },
-#    'temperature': {
-#        'options': [None, 'GPU temperature', 'Celcius', 'temperature', 'nvidia.temperature.gpu', 'line'],
-#        'lines': [
-#            [None, None, 'absolute', 1, 1000],
-#        ],
-#    },
-#    'host': {
-#        'options': [None, "Host memory usage", "GiB", 'mem', 'host.metrics', 'stacked'],
-#        'lines': [
-#            ['host.metrics.memory_free', 'free', 'absolute', 1, _shift2],
-#            ['host.metrics.memory_used', 'used', 'absolute', 1, _shift2],
-#        ],
-#    },
-#    'VMs.cpu.count': {
-#        'options': [None, 'VM vCPU count', 'count', 'CPU', 'vm.metrics', 'line'],
-#        'lines': [
-#            # set by Service.__get_VMs
-#        ],
-#    },
-#    'VMs.cpu.usage': {
-#        'options': [None, 'VM CPU usage, 100 % means one vCPU', 'CPU %', 'CPU', 'vm.metrics', 'stacked'],
-#        'lines': [
-#            # set by Service.__get_VMs
-#        ],
-#    },
-#    'VBD.io': {
-#        'options': [None, 'I/O from VM', 'MiB/s', 'VM I/O', 'vm.metrics'],
-#        'lines': [
-#            # set by Service.__get_VMs
-#        ],
-#    },
-#    'VBD.iops': {
-#        'options': [None, 'I/O requests/s from VM', 'IO/s', 'VM I/O', 'vm.metrics'],
-#        'lines': [
-#            # set by Service.__get_VMs
-#        ],
-#    },
-##    'PIF_metrics': {
-##        'options': [None, 'Physical InterFaces', 'kiB/s', 'bandwidth', 'pif.metrics'],
-##        'lines': [
-##            ['io_read_kbs', 'Read bandwidth'],
-##            ['io_write_kbs', 'Write bandwidth'],
-##        ],
-##    },
-##    'VBD_metrics': {
-##        'options': [None, 'Virtual Block Device', 'kiB/s', 'bandwidth', 'vbd.metrics'],
-##        'lines': [
-##            ['io_read_kbs', 'Read bandwidth'],
-##            ['io_write_kbs', 'Write bandwidth'],
-##        ],
-##    },
-#    'VIF_metrics': {
-#        'options': [None, 'Virtual InterFaces', 'kiB/s', 'bandwidth', 'vif.metrics'],
-#        'lines': [
-#            # set by Service.__get_VMs
-##            ['io_read_kbs', 'Read bandwidth'],
-##            ['io_write_kbs', 'Write bandwidth'],
-#        ],
-#    },
-#    # http://docs.vmd.citrix.com/XenServer/6.5.0/1.0/en_gb/api/?c=VM_guest_metrics
-#    'VM_guest_metrics': {
-#        'options': [None, 'metrics reported by the guest', None, 'VM.guest', 'VM.guest.metrics', 'stacked'],
-#        'lines': [
-#            ['memory', 'free/used/total memory', None],
-#        ],
-#    },
-#    'VM_metrics_CPU': {
-#        'options': [None, "Guest VCPUs", 'number', 'VM', 'VM.metrics.CPU'],
-#        'lines': [
-#            ['VCPUs_number', "current number of VCPUs"],
-#            ['VCPUs_utilisation', "utilisation for all of guest's current VCPUs"],
-#        ],
-#    },
-#    'VM_metrics_mem': {
-#        'options': [None, "Guest actual's memory", 'bytes', 'VM', 'VM.metrics'],
-#        'lines': [
-#            ['memory_actual', "guest actual\'s memory"],
-#        ],
-#    },
+    'memory': {
+        'options': [None, 'memory usage', '%', 'utilization', 'nvidia.utilization.memory', 'stacked'],
+        'lines': [],
+        'template': ['utilization.memory', 'GPU', 'absolute'],
+    },
+    'fan': {
+        'options': [None, 'fan speed', '%', 'fan', 'nvidia.fan.speed', 'line'],
+        'lines': [ ],
+        'template': ['fan.speed', 'GPU', 'absolute'],
+    },
+    'temperature': {
+        'options': [None, 'GPU temperature', 'Celcius', 'temperature', 'nvidia.temperature.gpu', 'line'],
+        'lines': [ ],
+        'template': ['temperature.gpu', 'GPU', 'absolute'],
+    },
 }
 
 
@@ -269,29 +184,9 @@ class Service(SimpleService):
     def _get_data(self):
         '''
         '''
-#        for k, v in self.definitions.items():
-#            options = v['options']
-#            lines = v['lines']
-#            line = lines[0] if lines else None
-#            if len(lines) == 1 and line[0] == line[1] == None:
-#                self.definitions[k]['lines'] = [
-#                    [
-#                        '%s.%s' % (
-#                            options[4].lstrip('nvidia.'),
-#                            row['index'],
-#                        )
-#                    ] + line[2:]
-#                    for row in data
-#                ]
         logger.debug('called')
-        import random
-        return {
-            'utilization.gpu.0': random.randint(0, 100),
-            'utilization.gpu.1': random.randint(0, 100),
-            'temperature.gpu.0': random.randint(0, 100),
-            'temperature.gpu.1': random.randint(0, 100),
-        }
         data = {}
+        categories = collections.defaultdict(list)
         for line in self._get_raw_data():
             row = {
                 k: cast(v.split(None, 1)[0], -1, int)
@@ -299,33 +194,96 @@ class Service(SimpleService):
             }
             index = row.pop('index')
             for k, v in row.items():
-                data[ '%s.%s' % (k, index) ] = v
+                key = '%s.%s' % (k, index)
+                categories[k]+= [key]
+                data[key] = v
+        self.__create_definitions(categories, data)
         logger.debug('get data return: %r', data)
         return data
 
 
-    def __create_definitions(self):
+    def __create_definitions(self, categories, data):
         logger.debug('called')
-        data = self._get_data()
+        changed = False
         for k, v in self.definitions.items():
-            options = v['options']
-            lines = v['lines']
-            line = lines[0] if lines else None
-            if len(lines) == 1 and line[0] == line[1] == None:
-                self.definitions[k]['lines'] = [
-                    [
-                        '%s.%s' % (
-                            options[4].lstrip('nvidia.'),
-                            row['index'],
-                        )
-                    ] + line[2:]
-                    for row in data
-                ]
+            if v['lines']:
+                continue
+            changed = True
+            template = v['template']
+            category = categories[template[0]]
+            self.definitions[k]['lines'] = [
+                [
+                    identifier,
+                    template[1] + ' ' + identifier.rpartition('.')[-1],
+                ] + template[2:]
+                for identifier in category
+            ]
+        if changed:
+            logger.info('definitions changed: %r', self.definitions)
 
 
     def check(self):
+        logger.debug('called')
 #        self.__create_definitions()
         return SimpleService.check(self)
+
+    def create(self):
+        """
+        Create charts
+        :return: boolean
+        """
+        logger.debug('called')
+        data = self._get_data()
+        if data is None:
+            self.debug("failed to receive data during create().")
+            logger.debug('failed to receive data during create()')
+            return False
+
+        idx = 0
+        try:
+            for name in self.order:
+                logger.debug('create: name=%s', name)
+                options = self.definitions[name]['options'] + [self.priority + idx, self.update_every]
+                self.chart(self.chart_name + "." + name, *options)
+                # check if server has this datapoint
+                for line in self.definitions[name]['lines']:
+                    logger.debug('create: line=%s', line)
+                    if line[0] in data:
+                        self.dimension(*line)
+                    else:
+                        logger.debug('create: line not in data!')
+                idx += 1
+        except:
+            logger.error('meh', exc_info=True)
+
+        logger.info('data stream: %r', self._data_stream)
+        self.commit()
+        return True
+#    def dimension(self, id, name=None, algorithm="absolute", multiplier=1, divisor=1, hidden=False):
+#        ['utilization.gpu.0', 'a', 'used', 'absolute']
+
+
+class ServiceTest(SimpleService):
+    def __init__(self, configuration=None, name=None):
+        super(self.__class__,self).__init__(configuration=configuration, name=name)
+
+    def check(self):
+        return True
+
+    def create(self):
+        self.chart("example.python_random", '', 'A random number', 'random number',
+                   'random', 'random', 'line', self.priority, self.update_every)
+        self.dimension('random1')
+        self.commit()
+        return True
+
+    def update(self, interval):
+        import random
+        self.begin("example.python_random", interval)
+        self.set("random1", random.randint(0, 100))
+        self.end()
+        self.commit()
+        return True
 
 
 
@@ -355,19 +313,3 @@ def cast(value, default=None, to=str, *args, **kwargs):
         return to(value, *args, **kwargs)
     except:
         return default
-
-
-#if False: # if True:
-#    import user;from pprint import pprint;user;pprint
-#    self = Service({'update_every':3, 'priority':99999, 'retries':3})
-#    host_ref = self.session.xenapi.session.get_this_host(self.session._session)
-#
-#
-#    Self = Service({'update_every':3, 'priority':99999, 'retries':3, 'url': 'https://root:sdfsdf@localhost'})
-#if __name__ == '__main__':
-#    logging.basicConfig(
-#        format='%(levelname)s: %(message)s',
-#        datefmt='%F %T',
-#        level=logging.DEBUG,
-#    )
-#    self.check()
