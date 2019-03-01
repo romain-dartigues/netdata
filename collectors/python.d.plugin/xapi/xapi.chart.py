@@ -20,12 +20,27 @@ Sample configuration:
 import collections
 import logging
 import re
+import sys
 import time
 import urllib
 import xml.dom.minidom
 
+logging.basicConfig(
+    filename='/opt/netdata/var/log/netdata/xenserver.log',
+    format='%(asctime)s %(filename)s:%(lineno)d [%(levelname)s] %(message)s',
+    datefmt='%FT%T',
+    level=logging.DEBUG,
+)
+logger = logging.getLogger('netdata.xenserver')
+logger.debug('module loaded')
+
 # netdata dependency
-from base import SimpleService
+try:
+    from bases.FrameworkServices.SimpleService import SimpleService
+except Exception as err:
+    logger.fatal('unable to load netdata dependencies', exc_info=True)
+    raise
+
 
 # Xen API Python modle
 try:
@@ -35,15 +50,6 @@ except ImportError:
 
 
 
-
-logging.basicConfig(
-    filename='/tmp/rdartigues.log',
-    format='%(asctime)s %(filename)s:%(lineno)d [%(levelname)s] %(message)s',
-    datefmt='%FT%T',
-    level=logging.DEBUG,
-)
-logger = logging.getLogger('netdata.xenserver')
-logger.debug('module loaded')
 
 #priority = 90000
 retries = 10
@@ -335,6 +341,7 @@ class Service(SimpleService):
                 self.password = match.group('password')
                 self.server = match.group('hostname')
                 self.url = self.url.replace(match.group('credentials'), '')
+        logger.debug('Service(configuration=%r, name=%r)', configuration, name)
 
 
     def check(self):
@@ -464,8 +471,6 @@ class Service(SimpleService):
             data[k] = metrics['vbd_iops_write'] * 100
             tree['VBD.iops'][key + ('o', )] = (k, '%s write' % (name,), None, -1, 100)
 
-            # 
-
         del k
         # sort all lines
         for key, item in tree.iteritems():
@@ -511,15 +516,26 @@ class Service(SimpleService):
 
 
 
-logger.debug('loaded')
+#logger.debug('loaded')
 
-if False: # if True:
-    import user;from pprint import pprint;user;pprint
-    self = Service({'update_every':3, 'priority':99999, 'retries':3})
-    host_ref = self.session.xenapi.session.get_this_host(self.session._session)
+r'''
+session = XenAPI.xapi_local()
+session.login_with_password('', '', '1.0', 'netdata')
 
 
-    Self = Service({'update_every':3, 'priority':99999, 'retries':3, 'url': 'https://root:sdfsdf@localhost'})
+session = XenAPI.Session('https://localhost')
+session.login_with_password('root', 'sdfsdf06', '1.0', 'netdata')
+
+'''
+
+#if __name__ == '__main__' and 'test' in sys.argv:
+#    import user;from pprint import pprint;user;pprint
+#    self = Service({'update_every':3, 'priority':99999, 'retries':3})
+#    host_ref = self.session.xenapi.session.get_this_host(self.session._session)
+#
+#
+#    Self = Service({'update_every':3, 'priority':99999, 'retries':3, 'url': 'https://root:sdfsdf06@localhost'})
+#    pprint(self.check())
 #if __name__ == '__main__':
 #    logging.basicConfig(
 #        format='%(levelname)s: %(message)s',
@@ -527,3 +543,4 @@ if False: # if True:
 #        level=logging.DEBUG,
 #    )
 #    self.check()
+#    /etc/xensource/xapi-ssl.pem
