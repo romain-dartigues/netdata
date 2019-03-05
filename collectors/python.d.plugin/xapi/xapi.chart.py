@@ -349,6 +349,7 @@ class Service(SimpleService):
         Check if service is able to connect to server
         :return: boolean
         """
+        return True
         result = False
         try:
             result = self._connect()
@@ -514,6 +515,16 @@ class Service(SimpleService):
 
 
 
+def XenAPI_Session__init__(self, uri, transport=None, encoding=None, verbose=0, allow_none=1, ignore_ssl=False):
+    if ignore_ssl:
+        import ssl
+        ctx = ssl._create_unverified_context()
+        xmlrpclib.ServerProxy.__init__(self, uri, transport, encoding, verbose, allow_none, context=ctx)
+    self.transport = transport
+    self._session = None
+    self.last_login_method = None
+    self.last_login_params = None
+    self.API_version = XenAPI.API_VERSION_1_1
 
 
 #logger.debug('loaded')

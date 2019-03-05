@@ -130,15 +130,17 @@ class Session(xmlrpclib.ServerProxy):
 
         # Fix for CA-172901 (+ Python 2.4 compatibility)
         # Fix for context=ctx ( < Python 2.7.9 compatibility)
-        if not (sys.version_info[0] <= 2 and sys.version_info[1] <= 7 and sys.version_info[2] <= 9 ) \
-                and ignore_ssl:
-            import ssl
-            ctx = ssl._create_unverified_context()
-            xmlrpclib.ServerProxy.__init__(self, uri, transport, encoding,
-                                           verbose, allow_none, context=ctx)
-        else:
-            xmlrpclib.ServerProxy.__init__(self, uri, transport, encoding,
-                                           verbose, allow_none)
+        if ignore_ssl:
+            try:
+                import ssl
+                ctx = ssl._create_unverified_context()
+                xmlrpclib.ServerProxy.__init__(self, uri, transport, encoding,
+                                               verbose, allow_none,
+                                               context=ctx)
+            except Exception as err:
+                print('error: falling back', err)
+                xmlrpclib.ServerProxy.__init__(self, uri, transport, encoding,
+                                               verbose, allow_none)
         self.transport = transport
         self._session = None
         self.last_login_method = None
