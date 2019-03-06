@@ -102,36 +102,36 @@ CHARTS = {
             ['host.metrics.memory_used', 'used', 'absolute', 1, _shift2],
         ],
     },
-    'VMs.mem': {
-        'options': [None, "VM memory usage", "MiB", 'mem', 'vm.metrics', 'stacked'],
-        'lines': [
-            # set by Service.__get_VMs
-        ],
-    },
-    'VMs.cpu.count': {
-        'options': [None, 'VM vCPU count', 'count', 'CPU', 'vm.metrics', 'line'],
-        'lines': [
-            # set by Service.__get_VMs
-        ],
-    },
-    'VMs.cpu.usage': {
-        'options': [None, 'VM CPU usage, 100 % means one vCPU', 'CPU %', 'CPU', 'vm.metrics', 'stacked'],
-        'lines': [
-            # set by Service.__get_VMs
-        ],
-    },
-    'VBD.io': {
-        'options': [None, 'I/O from VM', 'MiB/s', 'VM I/O', 'vm.metrics'],
-        'lines': [
-            # set by Service.__get_VMs
-        ],
-    },
-    'VBD.iops': {
-        'options': [None, 'I/O requests/s from VM', 'IO/s', 'VM I/O', 'vm.metrics'],
-        'lines': [
-            # set by Service.__get_VMs
-        ],
-    },
+    # 'VMs.mem': {
+    #     'options': [None, "VM memory usage", "MiB", 'mem', 'vm.metrics', 'stacked'],
+    #     'lines': [
+    #         # set by Service.__get_VMs
+    #     ],
+    # },
+    # 'VMs.cpu.count': {
+    #     'options': [None, 'VM vCPU count', 'count', 'CPU', 'vm.metrics', 'line'],
+    #     'lines': [
+    #         # set by Service.__get_VMs
+    #     ],
+    # },
+    # 'VMs.cpu.usage': {
+    #     'options': [None, 'VM CPU usage, 100 % means one vCPU', 'CPU %', 'CPU', 'vm.metrics', 'stacked'],
+    #     'lines': [
+    #         # set by Service.__get_VMs
+    #     ],
+    # },
+    # 'VBD.io': {
+    #     'options': [None, 'I/O from VM', 'MiB/s', 'VM I/O', 'vm.metrics'],
+    #     'lines': [
+    #         # set by Service.__get_VMs
+    #     ],
+    # },
+    # 'VBD.iops': {
+    #     'options': [None, 'I/O requests/s from VM', 'IO/s', 'VM I/O', 'vm.metrics'],
+    #     'lines': [
+    #         # set by Service.__get_VMs
+    #     ],
+    # },
 #    'PIF_metrics': {
 #        'options': [None, 'Physical InterFaces', 'kiB/s', 'bandwidth', 'pif.metrics'],
 #        'lines': [
@@ -146,14 +146,14 @@ CHARTS = {
 #            ['io_write_kbs', 'Write bandwidth'],
 #        ],
 #    },
-    'VIF_metrics': {
-        'options': [None, 'Virtual InterFaces', 'kiB/s', 'bandwidth', 'vif.metrics'],
-        'lines': [
-            # set by Service.__get_VMs
-#            ['io_read_kbs', 'Read bandwidth'],
-#            ['io_write_kbs', 'Write bandwidth'],
-        ],
-    },
+#     'VIF_metrics': {
+#         'options': [None, 'Virtual InterFaces', 'kiB/s', 'bandwidth', 'vif.metrics'],
+#         'lines': [
+#             # set by Service.__get_VMs
+# #            ['io_read_kbs', 'Read bandwidth'],
+# #            ['io_write_kbs', 'Write bandwidth'],
+#         ],
+#     },
 #    # http://docs.vmd.citrix.com/XenServer/6.5.0/1.0/en_gb/api/?c=VM_guest_metrics
 #    'VM_guest_metrics': {
 #        'options': [None, 'metrics reported by the guest', None, 'VM.guest', 'VM.guest.metrics', 'stacked'],
@@ -349,7 +349,7 @@ class Service(SimpleService):
         Check if service is able to connect to server
         :return: boolean
         """
-        return True
+        # return True
         result = False
         try:
             result = self._connect()
@@ -373,6 +373,7 @@ class Service(SimpleService):
 
         if not isinstance(self.session, XenAPI.Session) or force:
             if self.url and (self.username or self.password):
+                logger.info('connection to: %s (%s:%s)', self.url, self.username, self.password)
                 self.session = XenAPI.Session(self.url)
             else:
                 self.session = XenAPI.xapi_local()
@@ -386,7 +387,7 @@ class Service(SimpleService):
                 )
 
             except IOError:
-                logger.error('unable to connect to: %s (check permissions on your socket)', self.session)
+                logger.error('unable to connect to: %s (check permissions on your socket)', self.session, exc_info=True)
                 # will work with:
                 # chgrp netdata /var/xapi/xapi
                 # chmod g+rw /var/xapi/xapi

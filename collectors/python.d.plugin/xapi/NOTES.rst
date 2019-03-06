@@ -28,3 +28,16 @@ https://docs.netdata.cloud/collectors/#netdata-plugins
 test :
 /opt/netdata/usr/libexec/netdata/plugins.d/python.d.plugin xenserver debug trace
 
+
+Add server certificate to the trust store
+=========================================
+
+https://srkcitrix.wordpress.com/2012/06/11/replacing-the-default-xenserver-ssl-certificate/
+
+.. code-block:: bash
+
+   </etc/xensource/xapi-ssl.pem \
+      sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' \
+      > /etc/pki/ca-trust/source/anchors/$(hostname -f).crt
+   update-ca-trust
+
