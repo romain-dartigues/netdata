@@ -20,10 +20,12 @@ Sample configuration:
 import collections
 import logging
 import re
+import ssl
 import sys
 import time
 import urllib
 import xml.dom.minidom
+import xmlrpclib
 
 logging.basicConfig(
     filename='/opt/netdata/var/log/netdata/xenserver.log',
@@ -47,6 +49,7 @@ try:
     import XenAPI
 except ImportError:
     XenAPI = None
+
 
 
 
@@ -375,6 +378,10 @@ class Service(SimpleService):
             if self.url and (self.username or self.password):
                 logger.info('connection to: %s (%s:%s)', self.url, self.username, self.password)
                 self.session = XenAPI.Session(self.url)
+
+                # backport patch to ignore SSL check
+                ctx = ssl._create_unverified_context()
+                xmlrpclib.ServerProxy.__init__(self.session, self.url, None, None, 0, 1, context=ctx)
             else:
                 self.session = XenAPI.xapi_local()
 
@@ -475,6 +482,8 @@ class Service(SimpleService):
 
         del k
         # sort all lines
+        logger.debug('self: %s', dir(self))
+        logger.debug('self.def: %r', self.definitions) # XXX: TODO: because of threads there is no access to self.definitions...
         for key, item in tree.iteritems():
             self.definitions[key]['lines'] = [
                 item[k]
